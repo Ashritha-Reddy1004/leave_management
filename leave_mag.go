@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -24,7 +25,7 @@ type StudentCred struct {
 }
 type AdminCred struct {
 	Name string `json:"name"`
-	Id   string `json:"id"`
+	Id   int32 `json:"id"`
 }
 type LeaveReq struct {
 	Name    string `json:"name"`
@@ -93,6 +94,7 @@ var leaverequestdb *mongo.Collection
 var leaveapprovaldb *mongo.Collection
 var userdetailsdb *mongo.Collection
 var admindb *mongo.Collection
+var jwtSecretKey = []byte("jwt_secret_key")
 
 const studentCollection = "Student"
 const leaverequestCollection = "Leaverequests"
@@ -122,11 +124,96 @@ func connectDB() {
 	students_collection = client.Database("lms").Collection("Students")
 	leave_collection = client.Database("lms").Collection("leaves")
 }
-
-func AddStudent(w http.ResponseWriter, r *http.Request) {
-	a.Header().Set("Contents", "application/json")
-	var student student
-	json.NewDecoder(r.Body).Decode(&student)
-	fmt.Println("student", student)
-
+func PrintMessage(message string) {
+	fmt.Println("---------------------------------------")
+	fmt.Println(message)
+	fmt.Println("----------------------------------------")
+}
+func CreateJWT(Id int32)(response string,err error){
+	expirationTime := time.Now().Add(5*time.Minute)
+	claims :=&Claims{
+		Id : id,
+		StaStandardClaims: jwt.StandardClaims{
+			ExpiresAt : expirationTime.Unix(),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethod256,claims)
+	tokeString,err :=token.SignedString(jwtSecretKey)
+	if err==nil{
+		return tokenString ,nil
+	}
+	return "",err
+}
+func VerifyToken(tokenString string)(id int32,err error){
+	claims=&Claims{}
+	token,err:=jwt.ParseWithClass(tokenString,claims,func(token *jwt.Token)(interface{},error){
+		return string(jwtSecretKey),nil
+})
+if token !=nil{
+	return claims.Id,nil
+}
+  return "",err
+}
+func StudentLogin(w http.ResponseWriter, r *http.Request){
+	var LoginRequest Login 
+	var result Student
+	json.NewDecoder(r.Body).Decode(&LoginRequest)
+	if LoginRequest.Id ==""{
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status :400,
+			Message : "Id cannot be alphabets",
+		})
+	}else if LoginRequest.Password==""{
+		json.NewEncoder(w).Encode(ErrorResponse{
+			Status :400,
+			Message:"Can't add the details with null",
+		})
+	}else{
+		ctx,cancel:=context.WithTimeout(context.Background(),10*time.Second)
+	    hashpassword :=LoginRequest.Password
+		h:=sha256.New()
+		h.Write([]byte(hashpassword))
+		loginRequest.Password=hex.EncodeToString(h.Sum(nil))
+		var err=userdetailsdb.FindONe(ctx,bson.M{
+			"id":LoginRequest.Id,
+			"password":LoginRequest.Password,
+		}).Decode(&result)
+		defer cancel()
+		if err !=nil{
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Status:400,
+				Message:fmt.Sprintf("Cannot add the student details with null values err= ",err),
+			})
+		}else{
+			tokenString,_:=CreateJWT(LoginRequest.Id)
+			if tokenString ==""{
+			json.NewEncoder(w).Encode(ErrorResponse{
+				Status :400,
+				Message :"Cannot add the student data with null values"
+			})
+		}
+		var ErrorMsg = ErrorMsg{
+			Status : http.StatusOK,
+			Message :"You are already a user, try signing in",
+			Response :JsonSigninRes{
+				Status: 200,
+				Token :tokenString,
+				Invalid :false,
+				Message : fmt.Sprintf("Successful login %s",&LoginRequest.Id)
+			},
+		}
+	    ErrorMsg,jsonError :=json.Marshal(ErrorMsg)
+		if jsonError !=nil{
+			json.NewEncoder(w).Encode(EncodeResponse{
+				Status :400,
+				Message : "Cannot add the student details with null values",
+			})
+		}
+		w.Header().Set("Content-Type","application/json")
+		w.Write(successJsonResponse)
+	}
+}
+}
+func AdminLogin(w http.ResponseWriter, r *http.Request){
+	var LoginRequest
 }
