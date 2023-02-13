@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,47 +11,50 @@ import (
 	"os"
 	"time"
 
+	"github.com/golang-jwt/jwt/v4"
+
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Student struct {
 	Name string `json:"name"`
-	Id   int32  `json:"id"`
+	Id   string `json:"id"`
 }
 type StudentCred struct {
 	Name     string `json:"name"`
-	Id       int32  `json:"id"`
+	Id       string `json:"id"`
 	Password string `json:"password"`
 }
 type AdminCred struct {
-	Name string `json:"name"`
-	Id   int32 `json:"id"`
+	Password string `json:"password"`
+	Id       string `json:"id"`
 }
 type LeaveReq struct {
-	Name    string `json:"name"`
-	LeaveId int32  `json:"leaveid"`
-	Reason  string `json:"reason"`
-	Date    string `json:"date"`
-	Status  string `json:"status"`
+	Name   string `json:"name"`
+	Id     string `json:"leaveid"`
+	Reason string `json:"reason"`
+	Date   string `json:"date"`
+	Status string `json:"status"`
 }
 type LeaveApproval struct {
-	LeaveId int32  `json:"leaveid"`
-	Status  string `json:"status"`
+	Id     string `json:"leaveid"`
+	Status string `json:"status"`
 }
 type Signin struct {
-	Id       int32  `json:"id"`
+	Id       string `json:"id"`
 	Password string `json:"password"`
 }
 type Claims struct {
-	Id int32
+	Id string
 	jwt.StandardClaims
 }
 type JsonSigninRes struct {
 	Status  string `json:"status"`
 	Token   string `json:"token"`
-	Invaild bool   `json:"invalid"`
+	Invalid bool   `json:"invalid"`
 	Message string `json:"message"`
 }
 type JsonResStudent struct {
@@ -114,106 +119,198 @@ func handleError(err error) {
 	}
 }
 
+var students_collection *mongo.Collection
+var leave_collection *mongo.Collection
+
 func connectDB() {
 	mongo_uri := goDotEnvVariable("MONGODB_URI")
-	client, er := mongo.NewClient(options.Client().ApplyURI(mongo_url))
+	client, err := mongo.NewClient(options.Client().ApplyURI(mongo_uri))
 	handleError(err)
 	fmt.Println("Connection Established")
 	err = client.Connect(context.TODO())
 	handleError(err)
-	students_collection = client.Database("lms").Collection("Students")
-	leave_collection = client.Database("lms").Collection("leaves")
+	//studentsdb := client.Database("lms").Collection("Students")
+	//leave_collection := client.Database("lms").Collection("Leaves")
+
 }
 func PrintMessage(message string) {
 	fmt.Println("---------------------------------------")
 	fmt.Println(message)
 	fmt.Println("----------------------------------------")
 }
-func CreateJWT(Id int32)(response string,err error){
-	expirationTime := time.Now().Add(5*time.Minute)
-	claims :=&Claims{
-		Id : id,
-		StaStandardClaims: jwt.StandardClaims{
-			ExpiresAt : expirationTime.Unix(),
+func CreateJWT(Id string) (response string, err error) {
+	expirationTime := time.Now().Add(5 * time.Minute)
+	claims := &Claims{
+		Id: Id,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethod256,claims)
-	tokeString,err :=token.SignedString(jwtSecretKey)
-	if err==nil{
-		return tokenString ,nil
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	tokenString, err := token.SignedString(jwtSecretKey)
+	if err == nil {
+		return tokenString, nil
 	}
-	return "",err
+	return "", err
 }
-func VerifyToken(tokenString string)(id int32,err error){
-	claims=&Claims{}
-	token,err:=jwt.ParseWithClass(tokenString,claims,func(token *jwt.Token)(interface{},error){
-		return string(jwtSecretKey),nil
-})
-if token !=nil{
-	return claims.Id,nil
+func VerifyToken(tokenString string) (id string, err error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		return string(jwtSecretKey), nil
+	})
+	if token != nil {
+		return claims.Id, nil
+	}
+	return "", err
 }
-  return "",err
-}
-func StudentLogin(w http.ResponseWriter, r *http.Request){
-	var LoginRequest Login 
+func StudentLogin(w http.ResponseWriter, r *http.Request) {
+	var Login Signin
 	var result Student
-	json.NewDecoder(r.Body).Decode(&LoginRequest)
-	if LoginRequest.Id ==""{
-		json.NewEncoder(w).Encode(ErrorResponse{
-			Status :400,
-			Message : "Id cannot be alphabets",
+	json.NewDecoder(r.Body).Decode(&Login)
+	if Login.Id == "" {
+		json.NewEncoder(w).Encode(ErrorRes{
+			Status:  "400",
+			Message: "Id cannot be alphabets",
 		})
-	}else if LoginRequest.Password==""{
-		json.NewEncoder(w).Encode(ErrorResponse{
-			Status :400,
-			Message:"Can't add the details with null",
+	} else if Login.Password == "" {
+		json.NewEncoder(w).Encode(ErrorRes{
+			Status:  "400",
+			Message: "Can't add the details with null",
 		})
-	}else{
-		ctx,cancel:=context.WithTimeout(context.Background(),10*time.Second)
-	    hashpassword :=LoginRequest.Password
-		h:=sha256.New()
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		hashpassword := Login.Password
+		h := sha256.New()
 		h.Write([]byte(hashpassword))
-		loginRequest.Password=hex.EncodeToString(h.Sum(nil))
-		var err=userdetailsdb.FindONe(ctx,bson.M{
-			"id":LoginRequest.Id,
-			"password":LoginRequest.Password,
+		Login.Password = hex.EncodeToString(h.Sum(nil))
+		var err = userdetailsdb.FindOne(ctx, bson.M{
+			"id":       Login.Id,
+			"password": Login.Password,
 		}).Decode(&result)
 		defer cancel()
-		if err !=nil{
-			json.NewEncoder(w).Encode(ErrorResponse{
-				Status:400,
-				Message:fmt.Sprintf("Cannot add the student details with null values err= ",err),
+		if err != nil {
+			json.NewEncoder(w).Encode(ErrorRes{
+				Status:  "400",
+				Message: fmt.Sprintf("Cannot add the student details with null values err= %s", err),
 			})
-		}else{
-			tokenString,_:=CreateJWT(LoginRequest.Id)
-			if tokenString ==""{
-			json.NewEncoder(w).Encode(ErrorResponse{
-				Status :400,
-				Message :"Cannot add the student data with null values"
-			})
+		} else {
+			tokenString, _ := CreateJWT(Login.Id)
+			if tokenString == "" {
+				json.NewEncoder(w).Encode(ErrorRes{
+					Status:  "400",
+					Message: "Cannot add the student data with null values",
+				})
+			}
+			var ErrorMsg = ErrorMsg{
+				Status:  string(http.StatusOK),
+				Message: "You are already a user, try signing in",
+				Response: JsonSigninRes{
+					Status:  "200",
+					Token:   tokenString,
+					Invalid: false,
+					Message: fmt.Sprintf("Successful login %s", Login.Id),
+				},
+			}
+			successJsonResponse, jsonError := json.Marshal(ErrorMsg)
+			if jsonError != nil {
+				json.NewEncoder(w).Encode(ErrorRes{
+					Status:  "400",
+					Message: "Cannot add the student details with null values",
+				})
+			}
+			w.Header().Set("Contents", "application/json")
+			w.Write(successJsonResponse)
 		}
-		var ErrorMsg = ErrorMsg{
-			Status : http.StatusOK,
-			Message :"You are already a user, try signing in",
-			Response :JsonSigninRes{
-				Status: 200,
-				Token :tokenString,
-				Invalid :false,
-				Message : fmt.Sprintf("Successful login %s",&LoginRequest.Id)
-			},
-		}
-	    ErrorMsg,jsonError :=json.Marshal(ErrorMsg)
-		if jsonError !=nil{
-			json.NewEncoder(w).Encode(EncodeResponse{
-				Status :400,
-				Message : "Cannot add the student details with null values",
-			})
-		}
-		w.Header().Set("Content-Type","application/json")
-		w.Write(successJsonResponse)
 	}
 }
+func AdminLogin(w http.ResponseWriter, r *http.Request) {
+	var LoginRequest AdminCred
+	var result Student
+	json.NewDecoder(r.Body).Decode(&LoginRequest)
+	if LoginRequest.Id == "" {
+		json.NewEncoder(w).Encode(ErrorMsg{
+			Status:  "400",
+			Message: "Id cannot be null",
+		})
+	} else if LoginRequest.Password == "" {
+		json.NewEncoder(w).Encode(ErrorMsg{
+			Status:  "400",
+			Message: "Cannot insert null details",
+		})
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		hashpassword := LoginRequest.Password
+		h := sha256.New()
+		h.Write([]byte(hashpassword))
+		LoginRequest.Password = hex.EncodeToString(h.Sum(nil))
+		var err = userdetailsdb.FindOne(ctx, bson.M{
+			"id":       LoginRequest.Id,
+			"password": LoginRequest.Password,
+		}).Decode(&result)
+		defer cancel()
+		if err != nil {
+			json.NewEncoder(w).Encode(ErrorRes{
+				Status:  "400",
+				Message: fmt.Sprintf("Cannot add null student details. err=%s", err),
+			})
+		} else {
+			tokenString, _ := CreateJWT(LoginRequest.Id)
+			if tokenString == "" {
+				json.NewEncoder(w).Encode(ErrorMsg{
+					Status:  "400",
+					Message: "Cannot add null student details",
+				})
+			}
+			var ErrorMsg = ErrorMsg{
+				Status:  string(http.StatusOK),
+				Message: "Credentials in use, try signing in",
+				Response: JsonSigninRes{
+					Status:  "400",
+					Token:   tokenString,
+					Invalid: false,
+					Message: fmt.Sprintf("Signin Successful %s", LoginRequest.Id),
+				},
+			}
+
+			successJsonResponse, jsonError := json.Marshal(ErrorMsg)
+			if jsonError != nil {
+				json.NewEncoder(w).Encode(ErrorRes{
+					Status:  "400",
+					Message: "Cannot insert null student data",
+				})
+			}
+			w.Header().Set("Contents", "application/json")
+			w.Write(successJsonResponse)
+		}
+	}
+
 }
-func AdminLogin(w http.ResponseWriter, r *http.Request){
-	var LoginRequest
+func SetAdminCred(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Contents", "application/json")
+	var admin AdminCred
+	json.NewDecoder(r.Body).Decode(&admin)
+	fmt.Println("admin ", admin)
+	if admin.Id == "" || admin.Password == "" {
+		json.NewEncoder(w).Encode(JsonResStudentCred{
+			Status:  "400",
+			Message: "Cannot add null student details",
+		})
+
+	}
+	hashpassword := admin.Password
+	h := sha256.New()
+	h.Write([]byte(hashpassword))
+	admin.Password = hex.EncodeToString(h.Sum(nil))
+	result, err := userdetailsdb.InsertOne(mongoCtx, admin)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResAdminCred{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+	}
+	json.NewEncoder(w).Encode(JsonResAdminCred{
+		Status:  "200",
+		Data:    []AdminCred(admin),
+		Message: fmt.Sprintf("Admin Inserted Successfully : %s", result.InsertedID),
+	})
 }
