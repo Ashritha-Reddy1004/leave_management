@@ -20,8 +20,9 @@ import (
 )
 
 type Student struct {
-	Name string `json:"name"`
-	Id   string `json:"id"`
+	Name  string `json:"name"`
+	Id    string `json:"id"`
+	Email string `json:"Email"`
 }
 type StudentCred struct {
 	Name     string `json:"name"`
@@ -93,7 +94,7 @@ type ErrorMsg struct {
 }
 
 var db *mongo.Client
-var momgoCtx context.Context
+var mongo_uri context.Context
 var studentsdb *mongo.Collection
 var leaverequestdb *mongo.Collection
 var leaveapprovaldb *mongo.Collection
@@ -110,27 +111,33 @@ const adminCollection = "Admin"
 
 func goDotEnvVariable(key string) string {
 	err := godotenv.Load(".env")
-	handleError(err)
-	return os.Getenv(key)
-}
-func handleError(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	return os.Getenv(key)
 }
 
 var students_collection *mongo.Collection
 var leave_collection *mongo.Collection
 
-func connectDB() {
+func init() {
+	mongo_uri = context.Background()
 	mongo_uri := goDotEnvVariable("MONGODB_URI")
 	client, err := mongo.NewClient(options.Client().ApplyURI(mongo_uri))
-	handleError(err)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//err = client.Ping(mongo_uri, nil)
 	fmt.Println("Connection Established")
 	err = client.Connect(context.TODO())
-	handleError(err)
-	//studentsdb := client.Database("lms").Collection("Students")
-	//leave_collection := client.Database("lms").Collection("Leaves")
+	if err != nil {
+		log.Fatal(err)
+	}
+	studentsdb = client.Database(leavemanagement).Collection(studentCollection)
+	admindb = client.Database(leavemanagement).Collection(adminCollection)
+	leaverequestdb = client.Database(leavemanagement).Collection(leaverequestCollection)
+	leaveapprovaldb = client.Database(leavemanagement).Collection(leaverequestCollection)
+	userdetailsdb = client.Database(leavemanagement).Collection(userdetailsCollection)
 
 }
 func PrintMessage(message string) {
@@ -301,7 +308,7 @@ func SetAdminCred(w http.ResponseWriter, r *http.Request) {
 	h := sha256.New()
 	h.Write([]byte(hashpassword))
 	admin.Password = hex.EncodeToString(h.Sum(nil))
-	result, err := userdetailsdb.InsertOne(mongoCtx, admin)
+	result, err := userdetailsdb.InsertOne(mongo_uri, admin)
 	if err != nil {
 		json.NewEncoder(w).Encode(JsonResAdminCred{
 			Status:  "400",
@@ -310,7 +317,80 @@ func SetAdminCred(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(JsonResAdminCred{
 		Status:  "200",
-		Data:    []AdminCred(admin),
+		Data:    []AdminCred{admin},
 		Message: fmt.Sprintf("Admin Inserted Successfully : %s", result.InsertedID),
+	})
+}
+func SetStudentCred(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Contents", "application/json")
+	var student StudentCred
+	json.NewDecoder(r.Body).Decode(&student)
+	fmt.Println("student", student)
+	if student.Id == "" || student.Password == "" {
+		json.NewEncoder(w).Encode(JsonResStudentCred{
+			Status:  "400",
+			Message: "Cannot add null student details",
+		})
+
+	}
+	hashpassword := student.Password
+	h := sha256.New()
+	h.Write([]byte(hashpassword))
+	student.Password = hex.EncodeToString(h.Sum(nil))
+	result, err := userdetailsdb.InsertOne(mongo_uri, student)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResStudentCred{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error :%v", err),
+		})
+	}
+	json.NewEncoder(w).Encode(JsonResStudentCred{
+		Status:  "200",
+		Data:    []StudentCred{student},
+		Message: fmt.Sprintf("Student added successfully :%s", result.InsertedID),
+	})
+}
+func AddStudent(w http.ResponseWriter, r *http.Request) {
+	var student Student
+	json.NewDecoder(r.Body).Decode(&student)
+	fmt.Println("student", student)
+	if student.Id == "" || student.Name == "" || student.Email == "" {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "400",
+			Message: "Cannot add null student details ",
+		})
+	}
+	result, err := studentsdb.InsertOne(mongo_uri, student)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "200",
+			Data:    []Student{student},
+			Message: fmt.Sprintf("Student added successfully: %s", result.InsertedID),
+		})
+	}
+}
+func AddLeaveRequest(w http.ResponseWriter, r *http.Request) {
+	var student LeaveReq
+	json.NewDecoder(r.Body).Decode(&student)
+	fmt.Println("Leave Request", student)
+	if student.Id == "" || student.Name == "" || student.Reason == "" || student.Date == "" {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "400",
+			Message: "Cannot add null student details ",
+		})
+	}
+	student.Status = "Pending"
+	result, err := leaverequestdb.InsertOne(mongo_uri, student)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResLeaveReq{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+	}
+	w.Header().Set("Contents", "application/json")
+	json.NewEncoder(w).Encode(JsonResLeaveReq{
+		Status:  "200",
+		Data:    []LeaveReq{student},
+		Message: fmt.Sprintf("Leave request added successfully :%s", result.InsertedID),
 	})
 }
