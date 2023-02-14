@@ -128,7 +128,7 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = client.Ping(mongo_uri, nil)
+	//err = client.Ping(mongo_uri, nil)
 	fmt.Println("Connection Established")
 	err = client.Connect(context.TODO())
 	if err != nil {
@@ -489,7 +489,40 @@ func GetAllApprovedLeaves(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(&res)
 
 }
+func GetLeaveRequest(w http.ResponseWriter, r *http.Request) {
+	var leaves []LeaveReq
+	cursor, err := leaverequestdb.Find(context.Background(), bson.M{})
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResLeaveReq{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+		return
+	}
+	res := JsonResLeaveReq{
+		Status:  "200",
+		Data:    leaves,
+		Message: "Leave requests listed",
+	}
+	defer cursor.Close(context.Background())
+	w.Header().Set("contents", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(&res)
+}
 func main() {
 	a := mux.NewRouter()
 	a.HandleFunc("/AddStudent", AddStudent).Methods("POST")
+	a.HandleFunc("SetStudentCreden", SetStudentCred).Methods("POST")
+	a.HandleFunc("/AddLeaveRequest", AddLeaveRequest).Methods("POST")
+	a.HandleFunc("/GetLeaveRequest", GetLeaveRequest).Methods("GET")
+	a.HandleFunc("/GetAllStudents", GetAllStudents).Methods("GET")
+	a.HandleFunc("/AddLeaveApproval", AddApprovedLeaves).Methods("POST")
+	a.HandleFunc("/GetAllApprovedLeaves", GetAllApprovedLeaves).Methods("GET")
+	a.HandleFunc("/StudentLogin", StudentLogin).Methods("POST")
+	a.HandleFunc("/SetAdminCredentials", SetAdminCred).Methods("POST")
+	a.HandleFunc("/SetStudentCred", SetStudentCred).Methods("POST")
+	a.HandleFunc("/AdminLogin", AdminLogin).Methods("POST")
+	fmt.Println("Attempted to start the server")
+	log.Fatal(http.ListenAndServe(":8008", a))
+
 }
