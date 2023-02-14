@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/gorilla/mux"
 
 	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/bson"
@@ -127,7 +128,7 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	//err = client.Ping(mongo_uri, nil)
+	err = client.Ping(mongo_uri, nil)
 	fmt.Println("Connection Established")
 	err = client.Connect(context.TODO())
 	if err != nil {
@@ -350,6 +351,7 @@ func SetStudentCred(w http.ResponseWriter, r *http.Request) {
 		Message: fmt.Sprintf("Student added successfully :%s", result.InsertedID),
 	})
 }
+
 func AddStudent(w http.ResponseWriter, r *http.Request) {
 	var student Student
 	json.NewDecoder(r.Body).Decode(&student)
@@ -393,4 +395,101 @@ func AddLeaveRequest(w http.ResponseWriter, r *http.Request) {
 		Data:    []LeaveReq{student},
 		Message: fmt.Sprintf("Leave request added successfully :%s", result.InsertedID),
 	})
+}
+
+func AddApprovedLeaves(w http.ResponseWriter, r *http.Request) {
+	var approved LeaveApproval
+	var status LeaveReq
+	json.NewDecoder(r.Body).Decode(&approved)
+	fmt.Println("Approved Students", approved)
+	if approved.Id == "" || approved.Status == "" {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "400",
+			Message: "Cannot add null student details",
+		})
+	}
+	status.Status = "Accepted"
+	filter := bson.M{
+		"$set": bson.M{
+			"status": status.Status,
+		},
+	}
+	query := bson.M{
+		"StudentId": approved.Id,
+	}
+	result, err := leaveapprovaldb.InsertOne(mongo_uri, approved)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResLeaveApproval{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal error: %v", err),
+		})
+	}
+	_ = leaverequestdb.FindOneAndUpdate(mongo_uri, query, filter)
+	w.Header().Set("Contents", "application/json")
+	json.NewEncoder(w).Encode(JsonResLeaveApproval{
+		Status:  "200",
+		Data:    []LeaveApproval{approved},
+		Message: fmt.Sprintf("Leave Approved Succesfully : %s", result.InsertedID),
+	})
+}
+func GetAllStudents(w http.ResponseWriter, r *http.Request) {
+	var students []Student
+	cursor, err := studentsdb.Find(context.Background(), bson.M{})
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+		return
+	}
+	err = cursor.All(context.Background(), &students)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResStudent{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+		return
+	}
+	res := JsonResStudent{
+		Status:  "200",
+		Data:    students,
+		Message: "Leave requests listed successfully",
+	}
+	defer cursor.Close(context.Background())
+	w.Header().Set("Contents", "application.json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(&res)
+}
+func GetAllApprovedLeaves(w http.ResponseWriter, r *http.Request) {
+	var approves []LeaveApproval
+	cursor, err := leaveapprovaldb.Find(context.Background(), bson.M{})
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResLeaveApproval{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+		return
+	}
+	err = cursor.All(context.Background(), &approves)
+	if err != nil {
+		json.NewEncoder(w).Encode(JsonResLeaveApproval{
+			Status:  "400",
+			Message: fmt.Sprintf("Internal Error : %v", err),
+		})
+		return
+	}
+	res := JsonResLeaveApproval{
+		Status:  "200",
+		Data:    approves,
+		Message: "Leave approved Succesfully",
+	}
+	defer cursor.Close(context.Background())
+	w.Header().Set("Contents", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(&res)
+
+}
+func main() {
+	a := mux.NewRouter()
+	a.HandleFunc("/AddStudent", AddStudent).Methods("POST")
 }
